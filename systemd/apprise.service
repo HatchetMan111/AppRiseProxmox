@@ -1,0 +1,24 @@
+[Unit]
+Description=Apprise API – lokaler Notification-Gateway (Gunicorn/Django)
+Documentation=https://github.com/caronc/apprise-api
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=apprise
+Group=apprise
+WorkingDirectory=/opt/apprise-api/apprise_api
+Environment=PYTHONUNBUFFERED=1
+Environment=DJANGO_SETTINGS_MODULE=core.settings
+Environment=APPRISE_CONFIG_DIR=/var/lib/apprise/config
+Environment=APPRISE_ATTACH_DIR=/var/lib/apprise/attach
+Environment=APPRISE_PLUGIN_PATHS=/var/lib/apprise/plugin
+Environment=APPRISE_STATEFUL_MODE=simple
+Environment=APPRISE_WORKER_COUNT=2
+ExecStart=/opt/apprise-api/.venv/bin/gunicorn --bind 0.0.0.0:8000 --workers 2 --worker-class gevent --timeout 300 core.wsgi:application
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
