@@ -16,7 +16,9 @@ Environment=APPRISE_ATTACH_DIR=/var/lib/apprise/attach
 Environment=APPRISE_PLUGIN_PATHS=/var/lib/apprise/plugin
 Environment=APPRISE_STATEFUL_MODE=simple
 Environment=APPRISE_WORKER_COUNT=2
-ExecStart=/opt/apprise-api/.venv/bin/gunicorn --bind 0.0.0.0:8000 --workers 2 --worker-class gevent --timeout 300 core.wsgi:application
+# Gunicorn lauscht nur auf localhost – Nginx (:8000) ist der öffentliche
+# Front und liefert /s/ Static direkt aus (siehe nginx/apprise.conf).
+ExecStart=/opt/apprise-api/.venv/bin/gunicorn --bind 127.0.0.1:8001 --workers 2 --worker-class gevent --timeout 300 core.wsgi:application
 Restart=always
 RestartSec=5
 

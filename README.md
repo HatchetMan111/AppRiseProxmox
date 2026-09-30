@@ -27,9 +27,9 @@ bash apprise.sh --debug   # = bash -x, komplette Fehlermeldungskette + Log unter
 |---|---|
 | App-Name / Hostname | `apprise` |
 | Zweck | Lokaler Notification-Gateway – eine URL-Syntax für 150+ Dienste (Telegram, Discord, Mail, Gotify …), Web-UI + REST `/notify` |
-| Tech-Stack | Python/Django + Gunicorn (gevent), venv `/opt/apprise-api/.venv` |
+| Tech-Stack | Python/Django + Gunicorn (nur `127.0.0.1:8001`) + Nginx (`:8000`, liefert `/s/` Static direkt, proxyt Rest nach Gunicorn), venv `/opt/apprise-api/.venv` |
 | GitHub-Repo (Upstream) | `https://github.com/caronc/apprise-api` |
-| Web UI | `http://<LXC-IP>:8000` (bind `0.0.0.0` via Gunicorn), Health `/status` |
+| Web UI | `http://<LXC-IP>:8000` (Nginx-Front), Health `/status` |
 | Standard-Ressourcen | 1 vCPU / 1024 MB RAM / 4 GB Disk (leichtgewichtig, reicht für den Gateway-Betrieb) |
 | CT-ID | immer die **nächste freie ID** (`pvesh get /cluster/nextid`), außer `--ctid` gesetzt |
 | Template | `debian-12-standard` (neuestes auf Storage `local`) |
@@ -44,7 +44,13 @@ Das Skript (`set -euo pipefail`, idempotent, `trap ERR` mit Befehl+Zeile+Exit-Co
    `requirements.txt` + `gunicorn[gevent]`, legt `/var/lib/apprise/{config/store,attach,plugin}` an,
    schreibt `apprise.service`, `systemctl enable --now apprise`,
 4. verifiziert `systemctl is-active apprise` + HTTP auf `localhost:8000/status`
+   **und** Static auf `localhost:8000/s/css/base.css` (Nginx-Layer)
    und gibt die finale URL + Container-IP aus.
+
+> Hinweis (Fix v2): Die Web-UI braucht CSS/JS unter `/s/`, die Upstream per
+> Nginx liefert (Django hat keine `/s/`-Route). Darum läuft Gunicorn nur auf
+> `127.0.0.1:8001` und Nginx auf `:8000` davor. Ohne diesen Layer lädt die
+> Seite ungestylt (riesige Icons, tote Buttons) – kein Upstream-Bug.
 
 Erwartete Schlussausgabe (Beispiel):
 
@@ -96,4 +102,5 @@ pct stop 100 && pct destroy 100     # Deinstall
 ## Dateien
 
 - `install/apprise.sh` – Proxmox-Einzeiler (Host, root).
-- `systemd/apprise.service` – Gunicorn-Unit (`After=network-online.target`, `Restart=always`).
+- `systemd/apprise.service` – Gunicorn-Unit (nur localhost:8001, `After=network-online.target`, `Restart=always`).
+- `nginx/apprise.conf` – Nginx-Site (`:8000`, `/s/` Static aus `apprise_api/static` + Proxy nach Gunicorn).

@@ -4,7 +4,9 @@
 #
 # App:      Apprise API – lokaler Notification-Gateway (Web-UI + REST /notify)
 # Upstream: https://github.com/caronc/apprise-api (lib: https://github.com/caronc/apprise)
-# Stack:    Python/Django + Gunicorn (gevent), ohne Docker, ohne Cloud
+# Stack:    Python/Django + Gunicorn (gevent, nur localhost:8001) + Nginx (:8000),
+#           ohne Docker, ohne Cloud. Nginx liefert /s/ Static direkt aus
+#           (Django hat keine /s/-Route) und proxyt den Rest nach Gunicorn.
 # Läuft:    vollständig lokal im LXC, keine externen Cloud-Dienste nötig
 # Host:     DAS SKRIPT LÄUFT AUF DEM PROXMOX-HOST (nicht im Container!)
 # Usage:
@@ -22,6 +24,8 @@ APP_PORT="8000"                                 # Apprise API Web-UI + REST
 UPSTREAM_REPO="https://github.com/caronc/apprise-api"
 INSTALLER_REPO="https://github.com/HatchetMan111/AppRiseProxmox"
 SERVICE_URL="https://raw.githubusercontent.com/HatchetMan111/AppRiseProxmox/main/systemd/apprise.service"
+NGINX_SITE_URL="https://raw.githubusercontent.com/HatchetMan111/AppRiseProxmox/main/nginx/apprise.conf"
+# Öffentlich: Nginx auf APP_PORT (Static /s/ + Proxy). Intern: Gunicorn nur localhost:8001.
 
 DEFAULT_CORES="1"                               # vCPU (1 reicht, 2 bei viel Last)
 DEFAULT_RAM="1024"                              # RAM in MB (leichtgewichtiges Python)
@@ -211,7 +215,7 @@ pct exec "$CT_ID" -- bash -c '
   set -euo pipefail
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y git curl ca-certificates python3 python3-venv python3-pip
+  apt-get install -y git curl ca-certificates python3 python3-venv python3-pip nginx
   id apprise >/dev/null 2>&1 || useradd -m -s /bin/bash apprise
   if [ ! -d /opt/apprise-api/.git ]; then
     rm -rf /opt/apprise-api
@@ -253,7 +257,7 @@ Environment=APPRISE_ATTACH_DIR=/var/lib/apprise/attach
 Environment=APPRISE_PLUGIN_PATHS=/var/lib/apprise/plugin
 Environment=APPRISE_STATEFUL_MODE=simple
 Environment=APPRISE_WORKER_COUNT=2
-ExecStart=/opt/apprise-api/.venv/bin/gunicorn --bind 0.0.0.0:8000 --workers 2 --worker-class gevent --timeout 300 core.wsgi:application
+ExecStart=/opt/apprise-api/.venv/bin/gunicorn --bind 127.0.0.1:8001 --workers 2 --worker-class gevent --timeout 300 core.wsgi:application
 Restart=always
 RestartSec=5
 
@@ -263,6 +267,48 @@ UNIT
 fi
 pct exec "$CT_ID" -- systemctl daemon-reload
 pct exec "$CT_ID" -- systemctl enable --now apprise
+
+# Nginx-Front: liefert /s/ Static direkt aus, proxyt den Rest nach Gunicorn.
+# (Ohne diesen Layer lädt die Web-UI ungestylt: riesige Icons, tote Buttons –
+# Django hat keine /s/-Route, Static kommt Upstream per Nginx.)
+msg_info "Richte Nginx-Front (:8000) ein ..."
+if ! pct exec "$CT_ID" -- curl -fsSL -o /etc/nginx/sites-available/apprise "$NGINX_SITE_URL" 2>/dev/null; then
+  msg_warn "Nginx-Site-URL nicht erreichbar – schreibe Inline-Site."
+  pct push "$CT_ID" /dev/stdin /etc/nginx/sites-available/apprise <<NGINX_SITE
+server {
+    listen 8000;
+    listen [::]:8000;
+    server_name _;
+    client_max_body_size 500M;
+    location /s/ {
+        alias /opt/apprise-api/apprise_api/static/;
+        expires 7d;
+        access_log off;
+    }
+    location = /favicon.ico {
+        alias /opt/apprise-api/apprise_api/static/favicon.ico;
+        access_log off;
+        log_not_found off;
+    }
+    location / {
+        proxy_pass http://127.0.0.1:8001;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$http_host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_read_timeout 300s;
+    }
+}
+NGINX_SITE
+fi
+pct exec "$CT_ID" -- bash -c '
+  set -euo pipefail
+  ln -sf /etc/nginx/sites-available/apprise /etc/nginx/sites-enabled/apprise
+  nginx -t
+  systemctl enable --now nginx
+  systemctl reload nginx
+'
+msg_ok "Nginx-Front aktiv (Static /s/ + Proxy nach 127.0.0.1:8001)."
 
 # ---------------------------------------------------------------------------
 # 5. Verifikation: Service + Web UI
@@ -281,6 +327,11 @@ done
   || { msg_error "Web UI antwortet nicht auf localhost:${APP_PORT}/status."; pct exec "$CT_ID" -- systemctl status apprise --no-pager || true; pct exec "$CT_ID" -- journalctl -u apprise --no-pager -n 100 || true; exit 1; }
 msg_ok "Web UI antwortet (HTTP 200 auf localhost:${APP_PORT}/status)."
 
+msg_info "Prüfe Static-Layer (/s/ CSS) ..."
+pct exec "$CT_ID" -- curl -fs -m 10 "http://localhost:${APP_PORT}/s/css/base.css" >/dev/null 2>&1 \
+  || { msg_error "Static antwortet nicht auf localhost:${APP_PORT}/s/css/base.css (Nginx-Layer prüfen)."; pct exec "$CT_ID" -- systemctl status nginx --no-pager || true; pct exec "$CT_ID" -- nginx -t || true; exit 1; }
+msg_ok "Static antwortet (HTTP 200 auf localhost:${APP_PORT}/s/css/base.css)."
+
 echo ""
 echo "════════════════ INSTALLATION ERFOLGREICH ════════════════"
 echo "  App          : Apprise API – lokaler Notification-Gateway"
@@ -291,7 +342,7 @@ echo "  Web UI       : http://${CT_IP}:${APP_PORT}"
 echo "  API          : http://${CT_IP}:${APP_PORT}/notify  (POST urls+body)"
 echo "  Health       : http://${CT_IP}:${APP_PORT}/status"
 echo "  Root-Passwort: ${PASSWORD_ARG:-<bestehender CT, unverändert>} (nur jetzt angezeigt!)"
-echo "  Service      : systemctl status apprise  (im Container via: pct enter $CT_ID)"
+echo "  Service      : systemctl status apprise nginx  (im Container via: pct enter $CT_ID)"
 echo "  Update       : Skript erneut laufen lassen (idempotent, git pull + pip upgrade)"
 echo "  Deinstall    : pct stop $CT_ID && pct destroy $CT_ID"
 echo "  Reboot-Test  : pct reboot $CT_ID && sleep 60 && curl -fs http://${CT_IP}:${APP_PORT}/status"
