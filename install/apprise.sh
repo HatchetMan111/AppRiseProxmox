@@ -217,10 +217,11 @@ pct exec "$CT_ID" -- bash -c '
   apt-get update
   apt-get install -y git curl ca-certificates python3 python3-venv python3-pip nginx
   id apprise >/dev/null 2>&1 || useradd -m -s /bin/bash apprise
-  # Hinweis: /opt/apprise-api gehört User apprise – git als root würde mit
-  # 'dubious ownership' (Exit 128) abbrechen. Darum läuft git als apprise.
-  # WICHTIG: innen doppelte Anführungszeichen – einfache würden den äußeren
-  # 'bash -c ...'-Block sprengen (Geister-Installation ohne Fehler).
+  # ACHTUNG: In diesem Block sind KEINE einfachen Anfuehrungszeichen erlaubt,
+  # weder in Befehlen noch in Kommentaren – sie wuerden den aeusseren
+  # bash -c Block der Host-Shell sprengen und den Rest still abschneiden.
+  # Darum laeuft git als User apprise per su mit doppelten Zeichen.
+  # Ohne das kaeme als root: dubious ownership mit Exit 128.
   if [ ! -d /opt/apprise-api/.git ]; then
     rm -rf /opt/apprise-api
     su -s /bin/bash apprise -c "git clone https://github.com/caronc/apprise-api /opt/apprise-api"
@@ -239,6 +240,12 @@ pct exec "$CT_ID" -- bash -c '
 '
 # Hinweis: bewusst kein '| tail' hier – mit pipefail würde der trap sonst
 # die Pipe (tail) statt des gescheiterten pct-Befehls melden. Voll-Output steht im Log.
+
+# Host-seitiger Guard (ausserhalb des Container-Blocks): bricht laut ab,
+# falls der Checkout fehlt – schuetzt vor Geister-Installation.
+pct exec "$CT_ID" -- test -f /opt/apprise-api/apprise_api/core/wsgi.py \
+  || { msg_error "Checkout unvollstaendig: /opt/apprise-api/apprise_api/core/wsgi.py fehlt im Container."; exit 1; }
+msg_ok "Checkout ok (wsgi.py vorhanden)."
 
 # systemd-Unit aus diesem Repo übernehmen (fällt auf Inline-Unit zurück)
 if pct exec "$CT_ID" -- curl -fsSL -o /etc/systemd/system/apprise.service "$SERVICE_URL" 2>/dev/null; then
