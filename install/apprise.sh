@@ -224,6 +224,8 @@ pct exec "$CT_ID" -- bash -c '
   # Ohne das kaeme als root: dubious ownership mit Exit 128.
   if [ ! -d /opt/apprise-api/.git ]; then
     rm -rf /opt/apprise-api
+    mkdir -p /opt/apprise-api
+    chown apprise:apprise /opt/apprise-api
     su -s /bin/bash apprise -c "git clone https://github.com/caronc/apprise-api /opt/apprise-api"
   else
     su -s /bin/bash apprise -c "git -C /opt/apprise-api pull --ff-only"
