@@ -217,11 +217,13 @@ pct exec "$CT_ID" -- bash -c '
   apt-get update
   apt-get install -y git curl ca-certificates python3 python3-venv python3-pip nginx
   id apprise >/dev/null 2>&1 || useradd -m -s /bin/bash apprise
+  # Hinweis: /opt/apprise-api gehört User apprise – git als root würde mit
+  # 'dubious ownership' (Exit 128) abbrechen. Darum läuft git als apprise.
   if [ ! -d /opt/apprise-api/.git ]; then
     rm -rf /opt/apprise-api
-    git clone https://github.com/caronc/apprise-api /opt/apprise-api
+    su -s /bin/bash apprise -c 'git clone https://github.com/caronc/apprise-api /opt/apprise-api'
   else
-    git -C /opt/apprise-api pull --ff-only
+    su -s /bin/bash apprise -c 'git -C /opt/apprise-api pull --ff-only'
   fi
   if [ ! -x /opt/apprise-api/.venv/bin/python ]; then
     python3 -m venv /opt/apprise-api/.venv
